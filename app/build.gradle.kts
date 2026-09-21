@@ -57,4 +57,7 @@ dependencies {
     implementation("com.google.code.gson:gson:2.12.1")
 
     implementation("com.google.mlkit:translate:17.0.3")
+
+    // Required for kotlinx.coroutines.tasks.await() used by ML Kit translation.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 }

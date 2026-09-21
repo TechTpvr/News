@@ -6,6 +6,7 @@ import android.content.*
 import android.net.Uri
 import android.widget.Toast
 import android.os.Build
+import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -148,13 +149,78 @@ fun NabzApp(openNewsId: String? = null) {
         ) { p ->
             AnimatedContent(targetState = Pair(tab, selected), label = "screen") { state ->
                 when (state.first) {
-                    0 -> if (state.second == null) if (error != null && news.isEmpty()) ErrorState(Modifier.padding(p), error!!, onRetry = { scope.launch { error = null; loading = true; runCatching { news = NewsRepository.fetch(ctx); dollar = NewsRepository.dollarRate() }.onFailure { error = "اتصال به منابع خبری با مشکل مواجه شد." }; loading = false } })
-                    Home(Modifier.padding(p), news, loading, dollar, category, { category = it }, query, { query = it }, translated, { id, text -> scope.launch {
-                        val t = NewsRepository.translateToPersian(text); NewsRepository.saveTranslation(ctx, id, t); translated = translated + (id to t)
-                    } }, { selected = it }, saved, ::toggleSave) else NewsDetailScreen(Modifier.padding(p), state.second!!, translated[state.second!!.id], saved.contains(state.second!!.id), ::toggleSave, { selected = null })
-                    1 -> SavedScreen(Modifier.padding(p), news.filter { saved.contains(it.id) }, translated, { selected = it }, saved, ::toggleSave)
+                    0 -> {
+                        if (state.second == null) {
+                            if (error != null && news.isEmpty()) {
+                                ErrorState(
+                                    Modifier.padding(p),
+                                    error!!,
+                                    onRetry = {
+                                        scope.launch {
+                                            error = null
+                                            loading = true
+                                            runCatching {
+                                                news = NewsRepository.fetch(ctx)
+                                                dollar = NewsRepository.dollarRate()
+                                            }.onFailure {
+                                                error = "اتصال به منابع خبری با مشکل مواجه شد."
+                                            }
+                                            loading = false
+                                        }
+                                    }
+                                )
+                            } else {
+                                Home(
+                                    Modifier.padding(p),
+                                    news,
+                                    loading,
+                                    dollar,
+                                    category,
+                                    { category = it },
+                                    query,
+                                    { query = it },
+                                    translated,
+                                    { id, text ->
+                                        scope.launch {
+                                            val t = NewsRepository.translateToPersian(text)
+                                            NewsRepository.saveTranslation(ctx, id, t)
+                                            translated = translated + (id to t)
+                                        }
+                                    },
+                                    { selected = it },
+                                    saved,
+                                    ::toggleSave
+                                )
+                            }
+                        } else {
+                            NewsDetailScreen(
+                                Modifier.padding(p),
+                                state.second!!,
+                                translated[state.second!!.id],
+                                saved.contains(state.second!!.id),
+                                ::toggleSave,
+                                { selected = null }
+                            )
+                        }
+                    }
+                    1 -> SavedScreen(
+                        Modifier.padding(p),
+                        news.filter { saved.contains(it.id) },
+                        translated,
+                        { selected = it },
+                        saved,
+                        ::toggleSave
+                    )
                     2 -> ReminderScreen(Modifier.padding(p))
-                    3 -> SettingsScreen(Modifier.padding(p), ctx, onChanged = { scope.launch { news = NewsRepository.fetch(ctx) } })
+                    3 -> SettingsScreen(
+                        Modifier.padding(p),
+                        ctx,
+                        onChanged = {
+                            scope.launch {
+                                news = NewsRepository.fetch(ctx)
+                            }
+                        }
+                    )
                 }
             }
         }
@@ -183,7 +249,17 @@ fun Home(mod: Modifier, news: List<NewsItem>, loading: Boolean, dollar: String, 
             }
         }
         item { OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(17.dp), leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("جستجوی خبر، منبع یا موضوع") }) }
-        item { LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NewsCategory.values().forEach { c -> FilterChip(selected = c == category, onClick = { onCategory(c) }, label = { Text(c.label) }) } } }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(NewsCategory.values().toList()) { c ->
+                    FilterChip(
+                        selected = c == category,
+                        onClick = { onCategory(c) },
+                        label = { Text(c.label) }
+                    )
+                }
+            }
+        }
         if (breaking.isNotEmpty()) {
             item { AnimatedVisibility(visible = true, enter = fadeIn() + slideInVertically(), exit = fadeOut()) { BreakingSection(breaking, translated, onOpen) } }
         }

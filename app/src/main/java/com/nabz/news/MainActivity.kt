@@ -8,6 +8,7 @@ import android.widget.Toast
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -37,6 +38,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,10 +55,10 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 private val Ink = Color(0xFF111827)
-private val Purple = Color(0xFF7C3AED)
-private val Surface = Color(0xFFF6F7FB)
+private val Purple = Color(0xFF0E7490)
+private val Surface = Color(0xFFF4F7F9)
 private val Red = Color(0xFFDC2626)
-private val Orange = Color(0xFFF59E0B)
+private val Orange = Color(0xFFE59A23)
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -91,15 +95,20 @@ fun NabzApp(openNewsId: String? = null) {
     }
     fun refresh() = scope.launch {
         loading = true
-        news = NewsRepository.fetch(ctx)
-        translated = news.filter { it.language == "en" }
-            .mapNotNull { n -> NewsRepository.cachedTranslation(ctx, n.id)?.let { n.id to it } }.toMap()
-        dollar = NewsRepository.dollarRate()
+        error = null
+        runCatching {
+            news = NewsRepository.fetch(ctx).sortedByDescending { it.published }
+            translated = news.filter { it.language != "fa" }
+                .mapNotNull { n -> NewsRepository.cachedTranslation(ctx, n.id)?.let { n.id to it } }.toMap()
+            dollar = NewsRepository.dollarRate()
+        }.onFailure {
+            error = "اتصال به منابع خبری با مشکل مواجه شد."
+        }
         loading = false
     }
     LaunchedEffect(Unit) {
         news = NewsRepository.loadCachedNews(ctx)
-        translated = news.filter { it.language == "en" }
+        translated = news.filter { it.language != "fa" }
             .mapNotNull { n -> NewsRepository.cachedTranslation(ctx, n.id)?.let { n.id to it } }.toMap()
         refresh()
     }
@@ -107,28 +116,50 @@ fun NabzApp(openNewsId: String? = null) {
         if (!openNewsId.isNullOrBlank()) news.firstOrNull { it.id == openNewsId }?.let { selected = it }
     }
     LaunchedEffect(news) {
-        news.filter { it.language == "en" && System.currentTimeMillis() - it.published >= 60_000 && translated[it.id] == null }
-            .take(12).forEach { n -> launch {
-                val t = NewsRepository.translateToPersian(n.title + "\n" + n.summary)
+        val pending = news.filter { it.language != "fa" && translated[it.id] == null }
+        for (n in pending) {
+            val original = n.title + "\n" + n.summary
+            val t = NewsRepository.translateToPersian(original)
+            if (t.isNotBlank() && t != original) {
                 NewsRepository.saveTranslation(ctx, n.id, t)
                 translated = translated + (n.id to t)
-            }}
+            }
+        }
+    }
+
+    var lastBackPress by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        when {
+            selected != null -> selected = null
+            tab != 0 -> tab = 0
+            else -> {
+                val now = System.currentTimeMillis()
+                if (now - lastBackPress <= 2000L) {
+                    (ctx as? Activity)?.finish()
+                } else {
+                    lastBackPress = now
+                    Toast.makeText(ctx, "برای خروج دوباره دکمه برگشت را بزنید", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     MaterialTheme(colorScheme = lightColorScheme(primary = Purple, onPrimary = Color.White, background = Surface, surface = Color.White)) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = FontFamily.SansSerif)) {
         Scaffold(
             containerColor = Surface,
             topBar = {
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(42.dp).clip(CircleShape).background(Brush.linearGradient(listOf(Purple, Color(0xFF4F46E5)))), contentAlignment = Alignment.Center) {
-                                Text("ن", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Black)
+                            Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(Brush.linearGradient(listOf(Color(0xFF0E7490), Color(0xFF164E63)))), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Article, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
                             }
                             Spacer(Modifier.width(10.dp))
                             Column {
-                                Text("نبض", fontWeight = FontWeight.Black, fontSize = 24.sp)
-                                Text("خبرهای مهم، یک‌جا", fontSize = 11.sp, color = Color.Gray)
+                                Text("روزانه", fontWeight = FontWeight.Black, fontSize = 24.sp)
+                                Text("خبرهای روز، سریع و فارسی", fontSize = 11.sp, color = Color.Gray)
                             }
                         }
                     },
@@ -199,6 +230,15 @@ fun NabzApp(openNewsId: String? = null) {
                                 translated[state.second!!.id],
                                 saved.contains(state.second!!.id),
                                 ::toggleSave,
+                                { id, text ->
+                                    scope.launch {
+                                        val t = NewsRepository.translateToPersian(text)
+                                        if (t != text) {
+                                            NewsRepository.saveTranslation(ctx, id, t)
+                                            translated = translated + (id to t)
+                                        }
+                                    }
+                                },
                                 { selected = null }
                             )
                         }
@@ -224,13 +264,18 @@ fun NabzApp(openNewsId: String? = null) {
                 }
             }
         }
+            }
+        }
     }
 }
 
 @Composable
 fun Home(mod: Modifier, news: List<NewsItem>, loading: Boolean, dollar: String, category: NewsCategory, onCategory: (NewsCategory) -> Unit, query: String, onQuery: (String) -> Unit, translated: Map<String, String>, onTranslate: (String, String) -> Unit, onOpen: (NewsItem) -> Unit, saved: Set<String>, onSave: (String) -> Unit) {
-    val filtered = news.filter { it.category == category && (query.isBlank() || "${it.title} ${it.summary} ${it.source}".contains(query, ignoreCase = true)) }
-        .sortedWith(compareByDescending<NewsItem> { it.importance }.thenByDescending { it.published })
+    val filtered = news.filter { n ->
+        n.category == category && (query.isBlank() ||
+            "${n.title} ${n.summary} ${n.source} ${translated[n.id].orEmpty()}".contains(query, ignoreCase = true))
+    }
+        .sortedByDescending { it.published }
     val breaking = filtered.filter { it.importance >= 80 }.take(5)
     LazyColumn(mod.fillMaxSize().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         item {
@@ -328,10 +373,11 @@ fun NewsCard(n: NewsItem, fa: String?, onTranslate: (String, String) -> Unit, on
                     Spacer(Modifier.weight(1f))
                     ImportanceBadge(n.importance)
                 }
+                Text(formatIranDateTime(n.published), fontSize = 10.sp, color = Color(0xFF64748B))
                 Text(fa?.substringBefore("\n") ?: n.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, lineHeight = 25.sp)
                 Text((if (fa != null) fa.substringAfter("\n", n.summary) else n.summary).take(240), fontSize = 13.sp, color = Color(0xFF4B5563), lineHeight = 20.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (n.language == "en" && fa == null) Button(onClick = { onTranslate(n.id, n.title + "\n" + n.summary) }, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("ترجمه") }
+                    if (n.language != "fa" && fa == null) Button(onClick = { onTranslate(n.id, n.title + "\n" + n.summary) }, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("ترجمه") }
                     OutlinedButton(onClick = { onSave(n.id) }) { Icon(if (isSaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, null); Spacer(Modifier.width(4.dp)); Text(if (isSaved) "ذخیره شد" else "ذخیره") }
                     IconButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(n.link))) }) { Icon(Icons.Default.OpenInNew, "منبع") }
                 }
@@ -346,14 +392,24 @@ fun NewsCard(n: NewsItem, fa: String?, onTranslate: (String, String) -> Unit, on
 }
 
 @Composable
-fun NewsDetailScreen(mod: Modifier, n: NewsItem, fa: String?, saved: Boolean, onSave: (String) -> Unit, onBack: () -> Unit) {
+fun NewsDetailScreen(mod: Modifier, n: NewsItem, fa: String?, saved: Boolean, onSave: (String) -> Unit, onTranslate: (String, String) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     LazyColumn(mod.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 30.dp)) {
         item { Row(verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowForward, "بازگشت") }; Text("جزئیات خبر", fontSize = 23.sp, fontWeight = FontWeight.Black) } }
         item { if (n.image != null) AsyncImage(model = n.image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(215.dp).clip(RoundedCornerShape(22.dp))) }
         item { Row(verticalAlignment = Alignment.CenterVertically) { Text(n.source, color = Purple, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); ImportanceBadge(n.importance) } }
+        item { Text(formatIranDateTime(n.published), fontSize = 11.sp, color = Color(0xFF64748B)) }
         item { Text(fa?.substringBefore("\n") ?: n.title, fontSize = 25.sp, fontWeight = FontWeight.Black, lineHeight = 34.sp) }
         item { Text(fa?.substringAfter("\n", n.summary) ?: n.summary, fontSize = 16.sp, lineHeight = 27.sp, color = Color(0xFF374151)) }
+        if (n.language != "fa" && fa == null) {
+            item {
+                Button(onClick = { onTranslate(n.id, n.title + "\n" + n.summary) }) {
+                    Icon(Icons.Default.Translate, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("ترجمه به فارسی")
+                }
+            }
+        }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = { onSave(n.id) }) { Icon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder, null); Spacer(Modifier.width(5.dp)); Text(if (saved) "ذخیره‌شده" else "ذخیره خبر") }; OutlinedButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(n.link))) }) { Text("مشاهده منبع اصلی") } } }
         item { Text("منبع: ${n.sources.ifEmpty { listOf(n.source) }.joinToString("، ")}", color = Color.Gray, fontSize = 12.sp) }
     }
@@ -363,7 +419,7 @@ fun NewsDetailScreen(mod: Modifier, n: NewsItem, fa: String?, saved: Boolean, on
     LazyColumn(mod.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { item { Text("خبرهای ذخیره‌شده", fontSize = 27.sp, fontWeight = FontWeight.Black) }; if (news.isEmpty()) item { Text("هنوز خبری ذخیره نکرده‌ای.", color = Color.Gray) }; items(news.sortedByDescending { it.published }) { n -> NewsCard(n, translated[n.id], { _, _ -> }, onOpen, saved.contains(n.id), onRemove) } }
 }
 
-@Composable fun ReminderScreen(mod: Modifier) { val ctx = LocalContext.current; var hour by remember { mutableIntStateOf(20) }; var min by remember { mutableIntStateOf(0) }; var set by remember { mutableStateOf(false) }; Column(mod.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) { Text("یادآوری روزانه", fontSize = 26.sp, fontWeight = FontWeight.Bold); Text("در ساعت انتخابی، اعلان مرور خبرهای مهم دریافت می‌کنی.", color = Color.Gray); Card(shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(18.dp)) { Text("%02d:%02d".format(hour, min), fontSize = 32.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(12.dp)); Button(onClick = { TimePickerDialog(ctx, { _, h, m -> hour = h; min = m }, hour, min, true).show() }) { Text("انتخاب ساعت") }; Spacer(Modifier.height(8.dp)); Button(onClick = { scheduleReminder(ctx, hour, min); set = true }, modifier = Modifier.fillMaxWidth()) { Text(if (set) "یادآوری فعال شد ✓" else "فعال‌سازی یادآوری") } } }; Text("برای MIUI 14، Autostart و Battery → No restrictions را برای نبض فعال کن.", fontSize = 13.sp) } }
+@Composable fun ReminderScreen(mod: Modifier) { val ctx = LocalContext.current; var hour by remember { mutableIntStateOf(20) }; var min by remember { mutableIntStateOf(0) }; var set by remember { mutableStateOf(false) }; Column(mod.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) { Text("یادآوری روزانه", fontSize = 26.sp, fontWeight = FontWeight.Bold); Text("در ساعت انتخابی، اعلان مرور خبرهای مهم دریافت می‌کنی.", color = Color.Gray); Card(shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(18.dp)) { Text("%02d:%02d".format(hour, min), fontSize = 32.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(12.dp)); Button(onClick = { TimePickerDialog(ctx, { _, h, m -> hour = h; min = m }, hour, min, true).show() }) { Text("انتخاب ساعت") }; Spacer(Modifier.height(8.dp)); Button(onClick = { scheduleReminder(ctx, hour, min); set = true }, modifier = Modifier.fillMaxWidth()) { Text(if (set) "یادآوری فعال شد ✓" else "فعال‌سازی یادآوری") } } }; Text("برای عملکرد بهتر اعلان‌ها، اجرای خودکار و محدودیت باتری برنامه «روزانه» را فعال نگه دار.", fontSize = 13.sp) } }
 
 @Composable fun SettingsScreen(mod: Modifier, ctx: Context, onChanged: () -> Unit) { Column(mod.fillMaxSize().padding(18.dp)) { Text("منابع خبری", fontSize = 26.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(8.dp)); Text("منابع دلخواهت را فعال یا غیرفعال کن.", color = Color.Gray); Spacer(Modifier.height(12.dp)); NewsRepository.sourceNames().forEach { source -> var checked by remember(source) { mutableStateOf(NewsRepository.isSourceEnabled(ctx, source)) }; Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) { Text(source, modifier = Modifier.weight(1f)); Switch(checked, { checked = it; NewsRepository.setSourceEnabled(ctx, source, it); onChanged() }) } } } }
 
